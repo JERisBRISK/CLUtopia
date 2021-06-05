@@ -1,0 +1,26 @@
+{
+  "name": "clutopia",
+  "version": "0.1.0",
+  "description": "A moderation bot for Discord, initially written for the CLU community.",
+  "main": "index.js",
+  "scripts": {
+    "start": "node app.js",
+    "dev": "nodemon app.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JERisBRISK/CLUtopia.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/JERisBRISK/CLUtopia/issues"
+  },
+  "homepage": "https://github.com/JERisBRISK/CLUtopia#readme",
+  "dependencies": {
+    "discord.js": "^12.5.3",
+    "dotenv": "^10.0.0"
+  }
+}
