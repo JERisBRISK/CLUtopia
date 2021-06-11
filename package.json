@@ -4,8 +4,11 @@
   "description": "A moderation bot for Discord, initially written for the CLU community.",
   "main": "index.js",
   "scripts": {
-    "start": "node app.js",
-    "dev": "nodemon app.js",
+    "prestart": "preprocess app.js >app.release.js",
+    "start": "node app.release.js",
+    "predebug": "preprocess app.js -DEBUG=true >app.debug.js",
+    "debug": "node app.debug.js",
+    "dev": "nodemon app.debug.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
