@@ -2,28 +2,32 @@
  * CLUtopia bot by JERisBRISK
  * 
  * Features
- * - disallowed names (grandfathering certain IDs)
+ * - disallowed names (grandfathering certain IDs) auto-banned
  * - temporary mutes
  * - temporary bans
  * - permanent bans
+ * - silence
  * - warnings (x strikes => you're out)
  * - forgiveness
  * - infractions / rapsheet
  */
 
 // include
-const Discord = require('discord.js');
-require('dotenv').config();
+const Log = require('./modules/log.js');
+const Config = require('./modules/config.js');
+const Db = require('./modules/db.js');
+const ParsedMessage = require('./modules/ParsedMessage');
+const DiscordClient = require('./modules/discordClient.js');
+
 const AppName = "CLUtopia"
 const Version = "0.1.0";
+const Author = "JERisBRISK";
+
 // #ifdef DEBUG
 const Flavor = "Debug";
 // #else
 const Flavor = "Release";
 // #endif
-const Author = "JERisBRISK";
-const CommandPrefix = '!';
-const CommandPrefixLength = CommandPrefix.length;
 
 class ValidationResult {
     constructor(success, reason) {
@@ -49,12 +53,12 @@ function validate(args, shapes) {
        
         if (shape instanceof RegExp) {
             // #ifdef DEBUG
-            debug(`    ${shape} is a RegExp, validating ${arg}`);
+            Log.debug(`    ${shape} is a RegExp, validating ${arg}`);
             // #endif
             if (!shape.test(arg)) {
                 let reason = `${arg} does NOT match ${shape}`
                 // #ifdef DEBUG
-                debug(`      ${reason}`)
+                Log.debug(`      ${reason}`)
                 // #endif
                 return new ValidationResult(false, reason);
             }
@@ -67,16 +71,62 @@ function validate(args, shapes) {
     return new ValidationResult(true, "");
 }
 
-// data for ban command
-const RolesImmuneToBan = process.env.BOT_ROLES_IMMUNE_TO_BAN.split(',').filter(Boolean)
+function parseImmunities(environmentValue) {
+    var split = environmentValue ? environmentValue.split(',').filter(Boolean) : [""];
+    return split.map(s => s.trim());
+}
+
+// immunities
+const Immunities = {
+    _all_ : {
+        roles : parseImmunities(process.env.BOT_ROLES_IMMUNE_TO_ALL),
+        users : parseImmunities(process.env.BOT_USERS_IMMUNE_TO_ALL),
+    },
+    ban : {
+        roles : parseImmunities(process.env.BOT_ROLES_IMMUNE_TO_BAN),
+        users : parseImmunities(process.env.BOT_USERS_IMMUNE_TO_BAN),
+    },
+};
+
+function userIsImmune(guild, user, command) {
+    // #ifdef DEBUG
+    Log.debug(`userIsImmune called with ${guild.name}, ${user.username} (${user.id}), ${command}`);
+    // #endif
+
+    var member = guild.member(user.id);
+    var serverOwner = guild.owner;
+
+    var summedRoles = Immunities._all_.roles.concat(Immunities[command].roles);
+    var summedUsers = Immunities._all_.users.concat(Immunities[command].users);
+
+    // see if the target is a member of a protected class
+    if (member) {
+        // #ifdef DEBUG
+        Log.debug(`${member.displayName} has roles: ${member.roles ? member.roles.cache.map(r => `${r.name}`).join(', ') : 'none'}`);
+        // #endif
+        if (summedRoles.map(r => {if (r.toUpperCase() == "OWNER") return r;})
+            && member === serverOwner) {
+            Log.audit(`member <@!${user.id}> has immunity because they own the place.`);
+            return true;
+        } else if (summedUsers.includes(user.id)) {
+            Log.audit(`${user.id} has user-based immunity to this command.`);
+            return true;
+        } else if (member.roles.cache.some(r => summedRoles.includes(r.name))) {
+            Log.audit(`${user.id} has role-based immunity to this command.`);
+            return true;
+        }
+    }
+
+    return false;
+}
 
 //!ban @member reason
 //Bans a member. Buh-bye.
-function ban(msg, args) {
+function ban(parsedMessage) {
     // #ifdef DEBUG
-    debug(`ban('${args}')`);
+    Log.debug(`ban('${parsedMessage.arguments}')`);
     // #endif
-    var vr = validate(args,
+    var vr = validate(parsedMessage.arguments,
         [
             // @member, which Discord expands to <@!0123456789012345> (! only if they have a nickname)
             /(?:^<@!?[\d]{18}>)/i,
@@ -84,51 +134,35 @@ function ban(msg, args) {
             null,
         ]);
 
+    var msg = parsedMessage.message;
+
     if (!vr.success) {
-        msg.reply(`${vr.reason}.\nTry: \`${CommandPrefix}ban @member reason\``);
+        msg.reply(`${vr.reason}.\nTry: \`${Config.CommandPrefix}ban @member reason\``);
         return;
     }
 
-    let split = splitAtFirstSpace(args);
-    if (split.length > 1) {
-        var member = split[0];
-        var reason = split[1];
-    } else {
-        var member = split[0];
-        var reason = "";
-    }
+    let split = splitAtFirstSpace(parsedMessage.arguments);
+    var member = split[0];
+    var reason = split[1];
 
     var user = msg.mentions.users.first();
-    var member = msg.guild.member(user.id);
-    var serverOwner = msg.guild.owner;
 
-    // see if the target is a member of a protected class
-    if (member) {
-        // #ifdef DEBUG
-        debug(`${member.displayName} has roles: ${member.roles ? member.roles.cache.map(r => `${r.name}`).join(', ') : 'none'}`);
-        // #endif
-        if (member === serverOwner) {
-            msg.reply(`member <@!${user.id}> has immunity because they own the place.`);
-            return;
-        } else if (member.roles.cache.some(role => RolesImmuneToBan.includes(role.name))) {
-            audit(`${user.id} was not banned because they possess one or more of the following roles: ${RolesImmuneToBan.join(', ')}`)
-            msg.reply(`member <@!${user.id}> has role-based immunity.`);
-            return;
-        }
+    if (userIsImmune(msg.guild, user, 'ban')) {
+        msg.reply(`member <@!${user.id}> is immune to this command.`);
+        return;
     }
     
     msg.reply(`member <@!${user.id}> was banned with reason: **${reason}**`);
 }
 
+function cleanup(msg) {
+    // TODO: implement cleanup
+}
+
 // globals
 var Commands = {
     ban: ban,
-
-    //!cleanup [@member] [count] reason
-    //Deletes a number of *un-pinned* comments from the channel.
-    //If member is specified, only messages by that member are removed.
-    //(Pins are kept so we can clean up spam/dreck around valuable messages)
-    cleanup: "cleanup",
+    cleanup: cleanup,
 
     //!forgive @member [all | count] reason
     // all - sets their infraction count to zero
@@ -168,87 +202,63 @@ var Commands = {
     warn: "warn",
 };
 
-// init
-const client = new Discord.Client();
+DiscordClient.login(process.env.BOT_TOKEN)
+    .then(() => { Log.audit("Successfully logged in to Discord."); })
+    .catch((error) => {
+        console.error(error);
+        process.exit(1);
+    });
 
-client.login(process.env.BOT_TOKEN);
+DiscordClient.on('message', (msg) => {
+    Log.audit(`${msg.author.username} ${msg.author} said '${msg.content}' in ${msg.channel.name} ${msg.channel}`);
 
-client.on('message', (msg) => {
-    audit(`${msg.author.username} ${msg.author} said '${msg.content}' in ${msg.channel.name} ${msg.channel}`);
-    
+    let pm = new ParsedMessage(msg);
+
     // this is not a bot command, bail out
-    if (!msg.content.startsWith(CommandPrefix)) {
+    if (!pm.isCommand) {
         // #ifdef DEBUG
-        debug("Not a bot command. Ignoring.");
+        Log.debug("OnMessage: Not a bot command. Ignoring.");
         // #endif
         return;
-    }
-
-    // trim the starting CommandPrefix character
-    let text = msg.content.substring(CommandPrefixLength);
-
-    // whitespace immediately followed the CommandPrefix, bail out
-    if (text[0] === ' ') {
-        // #ifdef DEBUG
-        debug('Command was prefixed with whitespace. Ignoring message.')
-        // #endif
-        return;
-    };
-
-    // split input into keyword and arguments
-    let split = splitAtFirstSpace(text);
-    if (split.length > 1) {
-        var keyword = split[0];
-        var args = split[1];
-    } else {
-        var keyword = split[0];
-        var args = "";
     }
 
     // #ifdef DEBUG
-    debug(`Provided keyword: ${keyword}`);
-    debug(`Provided arguments: ${args}`);
+    Log.debug(`Provided keyword: ${pm.keyword}`);
+    Log.debug(`Provided arguments: ${pm.arguments}`);
     // #endif
 
     // handle various commands
-    if (keyword in Commands) {
+    if (pm.keyword in Commands) {
         // #ifdef DEBUG
-        debug(`Identified keyword: ${keyword}`);
+        Log.debug(`Identified keyword: ${pm.keyword}`);
         // #endif
 
         // don't allow the bot to be used against itself
         var target = msg.mentions.users.first();
-        if (client.user.id == target.id) {
+        if (DiscordClient.user.id == target.id) {
             msg.reply(`your mind powers will not work on me.`);
             return;
         }
 
         // execute the command
-        (Commands[keyword])(msg, args);
+        (Commands[pm.keyword])(pm);
     } else {
         // #ifdef DEBUG
-        debug(`'${keyword}' is not a recognized command.`);
+        Log.debug(`'${pm.keyword}' is not a recognized command.`);
         // #endif
     }
 });
 
-// #ifdef DEBUG
-function debug(s) {
-    console.debug(`DEBUG|${s}`);
-}
-// #endif
-
-function audit(s) {
-    console.log(`AUDIT|${new Date().toUTCString()}: ${s.replace(/[\r\n]/g,' ')}`);
-}
-
+// splits a string at the first space
+// returns a two-element array
 function splitAtFirstSpace(s) {
     let firstSpaceIndex = s.indexOf(' ');
     if (firstSpaceIndex != -1) {
         return [s.substring(0, firstSpaceIndex), 
                 s.substr(firstSpaceIndex + 1)];
     }
-    return [s];
+
+    return [s, ""];
 }
 
-audit(`Starting ${AppName} ${Version} [${Flavor}] by ${Author}`);
+Log.audit(`Starting ${AppName} ${Version} [${Flavor}] by ${Author}`);
